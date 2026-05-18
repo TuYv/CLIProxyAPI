@@ -16,31 +16,48 @@ func Register(cfg *sdkconfig.SDKConfig) {
 		return
 	}
 
-	keys := normalizeKeys(cfg.APIKeys)
-	if len(keys) == 0 {
+	records := accountRecordsFromConfig(cfg)
+	if len(records) == 0 {
 		sdkaccess.UnregisterProvider(sdkaccess.AccessProviderTypeConfigAPIKey)
 		return
 	}
 
 	sdkaccess.RegisterProvider(
 		sdkaccess.AccessProviderTypeConfigAPIKey,
-		newProvider(sdkaccess.DefaultAccessProviderName, keys),
+		newProvider(sdkaccess.DefaultAccessProviderName, records),
 	)
+}
+
+type keyRecord struct {
+	Key         string
+	AccountID   string
+	AccountName string
+	APIKeyID    string
+	APIKeyName  string
+	Metadata    map[string]string
 }
 
 type provider struct {
 	name string
-	keys map[string]struct{}
+	keys map[string]keyRecord
 }
 
-func newProvider(name string, keys []string) *provider {
+func newProvider(name string, records []keyRecord) *provider {
 	providerName := strings.TrimSpace(name)
 	if providerName == "" {
 		providerName = sdkaccess.DefaultAccessProviderName
 	}
-	keySet := make(map[string]struct{}, len(keys))
-	for _, key := range keys {
-		keySet[key] = struct{}{}
+	keySet := make(map[string]keyRecord, len(records))
+	for _, record := range records {
+		key := strings.TrimSpace(record.Key)
+		if key == "" {
+			continue
+		}
+		record.Key = key
+		if _, exists := keySet[key]; exists {
+			continue
+		}
+		keySet[key] = record
 	}
 	return &provider{name: providerName, keys: keySet}
 }
@@ -89,13 +106,13 @@ func (p *provider) Authenticate(_ context.Context, r *http.Request) (*sdkaccess.
 		if candidate.value == "" {
 			continue
 		}
-		if _, ok := p.keys[candidate.value]; ok {
+		if record, ok := p.keys[candidate.value]; ok {
+			metadata := metadataFromKeyRecord(record)
+			metadata["source"] = candidate.source
 			return &sdkaccess.Result{
 				Provider:  p.Identifier(),
 				Principal: candidate.value,
-				Metadata: map[string]string{
-					"source": candidate.source,
-				},
+				Metadata:  metadata,
 			}, nil
 		}
 	}
@@ -138,4 +155,97 @@ func normalizeKeys(keys []string) []string {
 		return nil
 	}
 	return normalized
+}
+
+func accountRecordsFromConfig(cfg *sdkconfig.SDKConfig) []keyRecord {
+	if cfg == nil {
+		return nil
+	}
+	records := make([]keyRecord, 0)
+	seen := make(map[string]struct{})
+	for _, account := range cfg.Accounts {
+		accountID := strings.TrimSpace(account.ID)
+		if accountID == "" || account.Disabled {
+			continue
+		}
+		for _, apiKey := range account.APIKeys {
+			key := strings.TrimSpace(apiKey.Key)
+			if key == "" || apiKey.Disabled {
+				continue
+			}
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			records = append(records, keyRecord{
+				Key:         key,
+				AccountID:   accountID,
+				AccountName: strings.TrimSpace(account.Name),
+				APIKeyID:    defaultAPIKeyID(apiKey.ID, key),
+				APIKeyName:  strings.TrimSpace(apiKey.Name),
+				Metadata:    mergeMetadata(account.Metadata, apiKey.Metadata),
+			})
+		}
+	}
+	for _, key := range normalizeKeys(cfg.APIKeys) {
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		records = append(records, keyRecord{
+			Key:         key,
+			AccountID:   "default",
+			AccountName: "Default",
+			APIKeyID:    key,
+			APIKeyName:  "Legacy API key",
+		})
+	}
+	return records
+}
+
+func metadataFromKeyRecord(record keyRecord) map[string]string {
+	metadata := make(map[string]string, len(record.Metadata)+4)
+	for key, value := range record.Metadata {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			continue
+		}
+		metadata[trimmedKey] = strings.TrimSpace(value)
+	}
+	setMetadata(metadata, sdkaccess.MetadataAccountID, record.AccountID)
+	setMetadata(metadata, sdkaccess.MetadataAccountName, record.AccountName)
+	setMetadata(metadata, sdkaccess.MetadataAPIKeyID, record.APIKeyID)
+	setMetadata(metadata, sdkaccess.MetadataAPIKeyName, record.APIKeyName)
+	return metadata
+}
+
+func mergeMetadata(accountMetadata, keyMetadata map[string]string) map[string]string {
+	if len(accountMetadata)+len(keyMetadata) == 0 {
+		return nil
+	}
+	merged := make(map[string]string, len(accountMetadata)+len(keyMetadata))
+	for key, value := range accountMetadata {
+		setMetadata(merged, key, value)
+	}
+	for key, value := range keyMetadata {
+		setMetadata(merged, key, value)
+	}
+	return merged
+}
+
+func setMetadata(metadata map[string]string, key, value string) {
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if key == "" || value == "" {
+		return
+	}
+	metadata[key] = value
+}
+
+func defaultAPIKeyID(id, key string) string {
+	id = strings.TrimSpace(id)
+	if id != "" {
+		return id
+	}
+	return strings.TrimSpace(key)
 }

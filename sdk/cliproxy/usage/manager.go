@@ -15,6 +15,10 @@ type Record struct {
 	Model       string
 	Alias       string
 	APIKey      string
+	AccountID   string
+	AccountName string
+	APIKeyID    string
+	APIKeyName  string
 	AuthID      string
 	AuthIndex   string
 	AuthType    string

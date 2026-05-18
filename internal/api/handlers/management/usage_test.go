@@ -5,9 +5,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/redisqueue"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 )
 
 func TestGetUsageQueuePopsRequestedRecords(t *testing.T) {
@@ -43,6 +45,52 @@ func TestGetUsageQueuePopsRequestedRecords(t *testing.T) {
 			t.Fatalf("remaining queue = %q, want third item only", remaining)
 		}
 	})
+}
+
+func TestGetAccountUsageReturnsAccountSnapshots(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	redisqueue.ResetAccountUsageForTest()
+	t.Cleanup(redisqueue.ResetAccountUsageForTest)
+
+	usedAt := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	redisqueue.RecordAccountUsage(coreusage.Record{
+		AccountID:   "team-a",
+		AccountName: "Team A",
+		APIKeyID:    "ci",
+		APIKeyName:  "CI",
+		RequestedAt: usedAt,
+		Detail: coreusage.Detail{
+			InputTokens:  11,
+			OutputTokens: 13,
+			TotalTokens:  24,
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(rec)
+	ginCtx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/account-usage", nil)
+
+	h := &Handler{}
+	h.GetAccountUsage(ginCtx)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var payload []redisqueue.AccountUsageSnapshot
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(payload) != 1 {
+		t.Fatalf("payload length = %d, want 1", len(payload))
+	}
+	got := payload[0]
+	if got.AccountID != "team-a" || got.AccountName != "Team A" || got.APIKeyID != "ci" || got.APIKeyName != "CI" {
+		t.Fatalf("identity = %#v", got)
+	}
+	if got.Requests != 1 || got.Failures != 0 || got.Tokens.TotalTokens != 24 || !got.LastUsedAt.Equal(usedAt) {
+		t.Fatalf("snapshot = %#v", got)
+	}
 }
 
 func TestGetUsageQueueInvalidCountDoesNotPop(t *testing.T) {

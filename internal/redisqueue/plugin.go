@@ -48,27 +48,15 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 	apiKey := strings.TrimSpace(record.APIKey)
 	requestID := strings.TrimSpace(internallogging.GetRequestID(ctx))
 
-	tokens := tokenStats{
-		InputTokens:         record.Detail.InputTokens,
-		OutputTokens:        record.Detail.OutputTokens,
-		ReasoningTokens:     record.Detail.ReasoningTokens,
-		CachedTokens:        record.Detail.CachedTokens,
-		CacheReadTokens:     record.Detail.CacheReadTokens,
-		CacheCreationTokens: record.Detail.CacheCreationTokens,
-		TotalTokens:         record.Detail.TotalTokens,
-	}
-	if tokens.TotalTokens == 0 {
-		tokens.TotalTokens = tokens.InputTokens + tokens.OutputTokens + tokens.ReasoningTokens
-	}
-	if tokens.TotalTokens == 0 {
-		tokens.TotalTokens = tokens.InputTokens + tokens.OutputTokens + tokens.ReasoningTokens + tokens.CachedTokens
-	}
+	tokens := tokensFromDetail(record.Detail)
 
 	failed := record.Failed
 	if !failed {
 		failed = !resolveSuccess(ctx)
 	}
 	fail := resolveFail(ctx, record, failed)
+	record.Failed = failed
+	RecordAccountUsage(record)
 
 	detail := requestDetail{
 		Timestamp: timestamp,
@@ -88,6 +76,10 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 		Endpoint:      resolveEndpoint(ctx),
 		AuthType:      authType,
 		APIKey:        apiKey,
+		AccountID:     strings.TrimSpace(record.AccountID),
+		AccountName:   strings.TrimSpace(record.AccountName),
+		APIKeyID:      strings.TrimSpace(record.APIKeyID),
+		APIKeyName:    strings.TrimSpace(record.APIKeyName),
 		RequestID:     requestID,
 	})
 	if err != nil {
@@ -98,13 +90,17 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 
 type queuedUsageDetail struct {
 	requestDetail
-	Provider  string `json:"provider"`
-	Model     string `json:"model"`
-	Alias     string `json:"alias"`
-	Endpoint  string `json:"endpoint"`
-	AuthType  string `json:"auth_type"`
-	APIKey    string `json:"api_key"`
-	RequestID string `json:"request_id"`
+	Provider    string `json:"provider"`
+	Model       string `json:"model"`
+	Alias       string `json:"alias"`
+	Endpoint    string `json:"endpoint"`
+	AuthType    string `json:"auth_type"`
+	APIKey      string `json:"api_key"`
+	AccountID   string `json:"account_id,omitempty"`
+	AccountName string `json:"account_name,omitempty"`
+	APIKeyID    string `json:"api_key_id,omitempty"`
+	APIKeyName  string `json:"api_key_name,omitempty"`
+	RequestID   string `json:"request_id"`
 }
 
 type requestDetail struct {
@@ -125,6 +121,25 @@ type tokenStats struct {
 	CacheReadTokens     int64 `json:"cache_read_tokens"`
 	CacheCreationTokens int64 `json:"cache_creation_tokens"`
 	TotalTokens         int64 `json:"total_tokens"`
+}
+
+func tokensFromDetail(detail coreusage.Detail) tokenStats {
+	tokens := tokenStats{
+		InputTokens:         detail.InputTokens,
+		OutputTokens:        detail.OutputTokens,
+		ReasoningTokens:     detail.ReasoningTokens,
+		CachedTokens:        detail.CachedTokens,
+		CacheReadTokens:     detail.CacheReadTokens,
+		CacheCreationTokens: detail.CacheCreationTokens,
+		TotalTokens:         detail.TotalTokens,
+	}
+	if tokens.TotalTokens == 0 {
+		tokens.TotalTokens = tokens.InputTokens + tokens.OutputTokens + tokens.ReasoningTokens
+	}
+	if tokens.TotalTokens == 0 {
+		tokens.TotalTokens = tokens.InputTokens + tokens.OutputTokens + tokens.ReasoningTokens + tokens.CachedTokens
+	}
+	return tokens
 }
 
 type failDetail struct {

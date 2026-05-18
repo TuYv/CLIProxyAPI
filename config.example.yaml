@@ -55,11 +55,28 @@ remote-management:
 # Authentication directory (supports ~ for home directory)
 auth-dir: "~/.cli-proxy-api"
 
-# API keys for authentication
+# Legacy API keys for authentication. These are treated as account "default".
 api-keys:
   - "your-api-key-1"
   - "your-api-key-2"
   - "your-api-key-3"
+
+# Account-scoped API keys for client users, teams, or applications.
+accounts:
+  - id: "team-a"
+    name: "Team A"
+    api-keys:
+      - id: "ci"
+        name: "CI"
+        key: "team-a-ci-key"
+  - id: "team-b"
+    name: "Team B"
+    disabled: false
+    api-keys:
+      - id: "dev"
+        name: "Development"
+        key: "team-b-dev-key"
+        disabled: false
 
 # Enable debug logging
 debug: false

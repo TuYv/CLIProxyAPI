@@ -34,6 +34,9 @@ type SDKConfig struct {
 	// APIKeys is a list of keys for authenticating clients to this proxy server.
 	APIKeys []string `yaml:"api-keys" json:"api-keys"`
 
+	// Accounts groups client API keys by account for attribution and management.
+	Accounts []ClientAccount `yaml:"accounts,omitempty" json:"accounts,omitempty"`
+
 	// PassthroughHeaders controls whether upstream response headers are forwarded to downstream clients.
 	// Default is false (disabled).
 	PassthroughHeaders bool `yaml:"passthrough-headers" json:"passthrough-headers"`
@@ -44,6 +47,24 @@ type SDKConfig struct {
 	// NonStreamKeepAliveInterval controls how often blank lines are emitted for non-streaming responses.
 	// <= 0 disables keep-alives. Value is in seconds.
 	NonStreamKeepAliveInterval int `yaml:"nonstream-keepalive-interval,omitempty" json:"nonstream-keepalive-interval,omitempty"`
+}
+
+// ClientAccount groups API keys issued to one client account.
+type ClientAccount struct {
+	ID       string            `yaml:"id" json:"id"`
+	Name     string            `yaml:"name,omitempty" json:"name,omitempty"`
+	Disabled bool              `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	APIKeys  []ClientAPIKey    `yaml:"api-keys,omitempty" json:"api-keys,omitempty"`
+	Metadata map[string]string `yaml:"metadata,omitempty" json:"metadata,omitempty"`
+}
+
+// ClientAPIKey describes one API key issued under a client account.
+type ClientAPIKey struct {
+	ID       string            `yaml:"id" json:"id"`
+	Name     string            `yaml:"name,omitempty" json:"name,omitempty"`
+	Key      string            `yaml:"key" json:"key"`
+	Disabled bool              `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	Metadata map[string]string `yaml:"metadata,omitempty" json:"metadata,omitempty"`
 }
 
 // StreamingConfig holds server streaming behavior configuration.

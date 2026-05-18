@@ -26,6 +26,10 @@ func TestUsageQueuePluginPayloadIncludesStableFieldsAndSuccess(t *testing.T) {
 			Model:       "gpt-5.4",
 			Alias:       "client-gpt",
 			APIKey:      "test-key",
+			AccountID:   "team-a",
+			AccountName: "Team A",
+			APIKeyID:    "ci",
+			APIKeyName:  "CI",
 			AuthIndex:   "0",
 			AuthType:    "apikey",
 			Source:      "user@example.com",
@@ -44,6 +48,10 @@ func TestUsageQueuePluginPayloadIncludesStableFieldsAndSuccess(t *testing.T) {
 		requireStringField(t, payload, "alias", "client-gpt")
 		requireStringField(t, payload, "endpoint", "POST /v1/chat/completions")
 		requireStringField(t, payload, "auth_type", "apikey")
+		requireStringField(t, payload, "account_id", "team-a")
+		requireStringField(t, payload, "account_name", "Team A")
+		requireStringField(t, payload, "api_key_id", "ci")
+		requireStringField(t, payload, "api_key_name", "CI")
 		requireMissingField(t, payload, "user_api_key")
 		requireStringField(t, payload, "request_id", "ctx-request-id")
 		requireBoolField(t, payload, "failed", false)
@@ -151,8 +159,10 @@ func withEnabledQueue(t *testing.T, fn func()) {
 	SetEnabled(false)
 	SetEnabled(true)
 	SetUsageStatisticsEnabled(true)
+	ResetAccountUsageForTest()
 
 	defer func() {
+		ResetAccountUsageForTest()
 		SetEnabled(false)
 		SetEnabled(prevQueueEnabled)
 		SetUsageStatisticsEnabled(prevUsageEnabled)

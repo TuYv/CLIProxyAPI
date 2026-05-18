@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 	"github.com/tidwall/gjson"
@@ -60,7 +61,7 @@ func (r *UsageReporter) PublishAdditionalModel(ctx context.Context, model string
 	if !ok {
 		return
 	}
-	usage.PublishRecord(ctx, record)
+	usage.PublishRecord(ctx, r.withAccountMetadata(ctx, record))
 }
 
 func (r *UsageReporter) buildAdditionalModelRecord(model string, detail usage.Detail) (usage.Record, bool) {
@@ -97,7 +98,7 @@ func (r *UsageReporter) publishWithOutcome(ctx context.Context, detail usage.Det
 	}
 	detail = normalizeUsageDetailTotal(detail)
 	r.once.Do(func() {
-		usage.PublishRecord(ctx, r.buildRecord(detail, failed, fail))
+		usage.PublishRecord(ctx, r.buildRecordFromContext(ctx, detail, failed, fail))
 	})
 }
 
@@ -130,7 +131,7 @@ func (r *UsageReporter) EnsurePublished(ctx context.Context) {
 		return
 	}
 	r.once.Do(func() {
-		usage.PublishRecord(ctx, r.buildRecord(usage.Detail{}, false, usage.Failure{}))
+		usage.PublishRecord(ctx, r.buildRecordFromContext(ctx, usage.Detail{}, false, usage.Failure{}))
 	})
 }
 
@@ -143,6 +144,22 @@ func (r *UsageReporter) buildRecord(detail usage.Detail, failed bool, failures .
 		return usage.Record{Detail: detail, Failed: failed, Fail: fail}
 	}
 	return r.buildRecordForModel(r.model, detail, failed, fail)
+}
+
+func (r *UsageReporter) buildRecordFromContext(ctx context.Context, detail usage.Detail, failed bool, fail usage.Failure) usage.Record {
+	return r.withAccountMetadata(ctx, r.buildRecord(detail, failed, fail))
+}
+
+func (r *UsageReporter) withAccountMetadata(ctx context.Context, record usage.Record) usage.Record {
+	result, ok := sdkaccess.ResultFromContext(ctx)
+	if !ok || result == nil || len(result.Metadata) == 0 {
+		return record
+	}
+	record.AccountID = strings.TrimSpace(result.Metadata[sdkaccess.MetadataAccountID])
+	record.AccountName = strings.TrimSpace(result.Metadata[sdkaccess.MetadataAccountName])
+	record.APIKeyID = strings.TrimSpace(result.Metadata[sdkaccess.MetadataAPIKeyID])
+	record.APIKeyName = strings.TrimSpace(result.Metadata[sdkaccess.MetadataAPIKeyName])
+	return record
 }
 
 func (r *UsageReporter) buildRecordForModel(model string, detail usage.Detail, failed bool, fail usage.Failure) usage.Record {

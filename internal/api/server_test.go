@@ -1,11 +1,13 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +20,54 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 )
+
+func TestAuthMiddlewareSetsAccountMetadataContext(t *testing.T) {
+	manager := sdkaccess.NewManager()
+	manager.SetProviders([]sdkaccess.Provider{staticAccessProvider{result: &sdkaccess.Result{
+		Provider:  "test-provider",
+		Principal: "acct-key",
+		Metadata: map[string]string{
+			sdkaccess.MetadataAccountID:   "team-a",
+			sdkaccess.MetadataAccountName: "Team A",
+			sdkaccess.MetadataAPIKeyID:    "ci",
+			sdkaccess.MetadataAPIKeyName:  "CI",
+		},
+	}}})
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(AuthMiddleware(manager))
+	router.GET("/test", func(c *gin.Context) {
+		if got, _ := c.Get("accountID"); got != "team-a" {
+			t.Fatalf("accountID = %#v", got)
+		}
+		if got, _ := c.Get("apiKeyID"); got != "ci" {
+			t.Fatalf("apiKeyID = %#v", got)
+		}
+		result, ok := sdkaccess.ResultFromContext(c.Request.Context())
+		if !ok || result.Metadata[sdkaccess.MetadataAccountID] != "team-a" || result.Metadata[sdkaccess.MetadataAPIKeyID] != "ci" {
+			t.Fatalf("ResultFromContext() = %#v, %v", result, ok)
+		}
+		c.Status(http.StatusNoContent)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d", w.Code)
+	}
+}
+
+type staticAccessProvider struct {
+	result *sdkaccess.Result
+	err    *sdkaccess.AuthError
+}
+
+func (p staticAccessProvider) Identifier() string { return "static" }
+func (p staticAccessProvider) Authenticate(context.Context, *http.Request) (*sdkaccess.Result, *sdkaccess.AuthError) {
+	return p.result, p.err
+}
 
 func newTestServer(t *testing.T) *Server {
 	t.Helper()

@@ -42,6 +42,15 @@ func (h *Handler) GetUsageQueue(c *gin.Context) {
 	c.JSON(http.StatusOK, records)
 }
 
+// GetAccountUsage returns aggregated usage grouped by client account API key.
+func (h *Handler) GetAccountUsage(c *gin.Context) {
+	if h == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "handler unavailable"})
+		return
+	}
+	c.JSON(http.StatusOK, redisqueue.AccountUsageSnapshots())
+}
+
 func parseUsageQueueCount(value string) (int, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {

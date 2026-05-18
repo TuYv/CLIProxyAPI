@@ -600,7 +600,14 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/api-keys", s.mgmt.PutAPIKeys)
 		mgmt.PATCH("/api-keys", s.mgmt.PatchAPIKeys)
 		mgmt.DELETE("/api-keys", s.mgmt.DeleteAPIKeys)
+		mgmt.GET("/accounts", s.mgmt.GetAccounts)
+		mgmt.PUT("/accounts", s.mgmt.PutAccounts)
+		mgmt.PATCH("/accounts", s.mgmt.PatchAccount)
+		mgmt.DELETE("/accounts", s.mgmt.DeleteAccount)
+		mgmt.PATCH("/accounts/:id/api-keys", s.mgmt.PatchAccountAPIKey)
+		mgmt.DELETE("/accounts/:id/api-keys/:key_id", s.mgmt.DeleteAccountAPIKey)
 		mgmt.GET("/api-key-usage", s.mgmt.GetAPIKeyUsage)
+		mgmt.GET("/account-usage", s.mgmt.GetAccountUsage)
 		mgmt.GET("/usage-queue", s.mgmt.GetUsageQueue)
 
 		mgmt.GET("/gemini-api-key", s.mgmt.GetGeminiKeys)
@@ -1529,10 +1536,23 @@ func AuthMiddleware(manager *sdkaccess.Manager) gin.HandlerFunc {
 		result, err := manager.Authenticate(c.Request.Context(), c.Request)
 		if err == nil {
 			if result != nil {
+				c.Request = c.Request.WithContext(sdkaccess.WithResult(c.Request.Context(), result))
 				c.Set("userApiKey", result.Principal)
 				c.Set("accessProvider", result.Provider)
 				if len(result.Metadata) > 0 {
 					c.Set("accessMetadata", result.Metadata)
+					if accountID := strings.TrimSpace(result.Metadata[sdkaccess.MetadataAccountID]); accountID != "" {
+						c.Set("accountID", accountID)
+					}
+					if accountName := strings.TrimSpace(result.Metadata[sdkaccess.MetadataAccountName]); accountName != "" {
+						c.Set("accountName", accountName)
+					}
+					if apiKeyID := strings.TrimSpace(result.Metadata[sdkaccess.MetadataAPIKeyID]); apiKeyID != "" {
+						c.Set("apiKeyID", apiKeyID)
+					}
+					if apiKeyName := strings.TrimSpace(result.Metadata[sdkaccess.MetadataAPIKeyName]); apiKeyName != "" {
+						c.Set("apiKeyName", apiKeyName)
+					}
 				}
 			}
 			c.Next()

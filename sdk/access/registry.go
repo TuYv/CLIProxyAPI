@@ -20,6 +20,43 @@ type Result struct {
 	Metadata  map[string]string
 }
 
+const (
+	MetadataAccountID   = "account_id"
+	MetadataAccountName = "account_name"
+	MetadataAPIKeyID    = "api_key_id"
+	MetadataAPIKeyName  = "api_key_name"
+)
+
+type resultContextKey struct{}
+
+func WithResult(ctx context.Context, result *Result) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if result == nil {
+		return ctx
+	}
+	copyResult := *result
+	if result.Metadata != nil {
+		copyResult.Metadata = make(map[string]string, len(result.Metadata))
+		for key, value := range result.Metadata {
+			copyResult.Metadata[key] = value
+		}
+	}
+	return context.WithValue(ctx, resultContextKey{}, &copyResult)
+}
+
+func ResultFromContext(ctx context.Context) (*Result, bool) {
+	if ctx == nil {
+		return nil, false
+	}
+	result, ok := ctx.Value(resultContextKey{}).(*Result)
+	if !ok || result == nil {
+		return nil, false
+	}
+	return result, true
+}
+
 var (
 	registryMu sync.RWMutex
 	registry   = make(map[string]Provider)
