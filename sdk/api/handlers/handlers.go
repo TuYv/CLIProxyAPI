@@ -18,6 +18,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
+	clientaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
@@ -372,11 +373,16 @@ func (h *BaseAPIHandler) GetContextWithCancel(handler interfaces.APIHandler, c *
 		requestCtx = c.Request.Context()
 	}
 
-	if requestCtx != nil && logging.GetRequestID(parentCtx) == "" {
-		if requestID := logging.GetRequestID(requestCtx); requestID != "" {
-			parentCtx = logging.WithRequestID(parentCtx, requestID)
-		} else if requestID = logging.GetGinRequestID(c); requestID != "" {
-			parentCtx = logging.WithRequestID(parentCtx, requestID)
+	if requestCtx != nil {
+		if result, ok := clientaccess.ResultFromContext(requestCtx); ok {
+			parentCtx = clientaccess.WithResult(parentCtx, result)
+		}
+		if logging.GetRequestID(parentCtx) == "" {
+			if requestID := logging.GetRequestID(requestCtx); requestID != "" {
+				parentCtx = logging.WithRequestID(parentCtx, requestID)
+			} else if requestID = logging.GetGinRequestID(c); requestID != "" {
+				parentCtx = logging.WithRequestID(parentCtx, requestID)
+			}
 		}
 	}
 	newCtx, cancel := context.WithCancel(parentCtx)
