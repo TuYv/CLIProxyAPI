@@ -8,6 +8,7 @@ import (
 
 	internallogging "github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
+	log "github.com/sirupsen/logrus"
 )
 
 func init() {
@@ -57,6 +58,9 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 	fail := resolveFail(ctx, record, failed)
 	record.Failed = failed
 	RecordAccountUsage(record)
+	if err := RecordAccountUsageEvent(context.Background(), record); err != nil {
+		log.WithError(err).Warn("failed to persist usage event")
+	}
 
 	detail := requestDetail{
 		Timestamp: timestamp,

@@ -53,6 +53,17 @@ func init() {
 	buildinfo.BuildDate = BuildDate
 }
 
+func resolveUsageSQLitePath(configFilePath string) string {
+	if path := strings.TrimSpace(os.Getenv("USAGE_STORE_SQLITE_PATH")); path != "" {
+		return path
+	}
+	configFilePath = strings.TrimSpace(configFilePath)
+	if configFilePath == "" {
+		return "usage.db"
+	}
+	return filepath.Join(filepath.Dir(configFilePath), "usage.db")
+}
+
 func parseHomeFlagConfig(rawAddr string, password string) (config.HomeConfig, error) {
 	rawAddr = strings.TrimSpace(rawAddr)
 	if rawAddr == "" {
@@ -596,6 +607,12 @@ func main() {
 	}
 	redisqueue.SetUsageStatisticsEnabled(cfg.UsageStatisticsEnabled)
 	redisqueue.SetRetentionSeconds(cfg.RedisUsageQueueRetentionSeconds)
+	if usageStore, errUsageStore := redisqueue.NewSQLiteUsageEventStore(resolveUsageSQLitePath(configFilePath)); errUsageStore != nil {
+		log.Warnf("failed to initialize usage event store: %v", errUsageStore)
+	} else {
+		redisqueue.SetUsageEventStore(usageStore)
+		defer redisqueue.SetUsageEventStore(nil)
+	}
 	coreauth.SetQuotaCooldownDisabled(cfg.DisableCooling)
 
 	if err = logging.ConfigureLogOutput(cfg); err != nil {

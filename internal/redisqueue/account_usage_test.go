@@ -1,6 +1,8 @@
 package redisqueue
 
 import (
+	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -68,6 +70,86 @@ func TestRecordAccountUsageAggregatesByAccountAndKey(t *testing.T) {
 
 	teamB := snapshots[1]
 	if teamB.AccountID != "team-b" || teamB.APIKeyID != "dev" || teamB.Requests != 1 || teamB.Tokens.TotalTokens != 11 {
+		t.Fatalf("teamB snapshot = %#v", teamB)
+	}
+}
+
+func TestAccountUsageSnapshotsForRangeAggregatesPersistedEvents(t *testing.T) {
+	ResetUsageEventStoreForTest()
+	store, errStore := NewSQLiteUsageEventStore(filepath.Join(t.TempDir(), "usage.db"))
+	if errStore != nil {
+		t.Fatalf("NewSQLiteUsageEventStore: %v", errStore)
+	}
+	SetUsageEventStore(store)
+	t.Cleanup(ResetUsageEventStoreForTest)
+
+	base := time.Date(2026, 5, 18, 10, 0, 0, 0, time.UTC)
+	records := []coreusage.Record{
+		{
+			AccountID:   "team-a",
+			AccountName: "Team A",
+			APIKeyID:    "ci",
+			APIKeyName:  "CI",
+			RequestedAt: base.Add(-2 * time.Hour),
+			Detail: coreusage.Detail{
+				InputTokens:  100,
+				OutputTokens: 20,
+				TotalTokens:  120,
+			},
+		},
+		{
+			AccountID:   "team-a",
+			AccountName: "Team A",
+			APIKeyID:    "ci",
+			APIKeyName:  "CI",
+			RequestedAt: base.Add(time.Hour),
+			Failed:      true,
+			Detail: coreusage.Detail{
+				InputTokens:     10,
+				OutputTokens:    5,
+				ReasoningTokens: 2,
+			},
+		},
+		{
+			AccountID:   "team-b",
+			AccountName: "Team B",
+			APIKeyID:    "dev",
+			APIKeyName:  "Dev",
+			RequestedAt: base.Add(2 * time.Hour),
+			Detail: coreusage.Detail{
+				CachedTokens: 7,
+			},
+		},
+	}
+	for _, record := range records {
+		if errRecord := RecordAccountUsageEvent(context.Background(), record); errRecord != nil {
+			t.Fatalf("RecordAccountUsageEvent: %v", errRecord)
+		}
+	}
+
+	from := base
+	to := base.Add(3 * time.Hour)
+	snapshots, errUsage := AccountUsageSnapshotsForRange(context.Background(), &from, &to)
+	if errUsage != nil {
+		t.Fatalf("AccountUsageSnapshotsForRange: %v", errUsage)
+	}
+	if len(snapshots) != 2 {
+		t.Fatalf("snapshots = %d, want 2: %#v", len(snapshots), snapshots)
+	}
+
+	teamA := snapshots[0]
+	if teamA.AccountID != "team-a" || teamA.APIKeyID != "ci" || teamA.Requests != 1 || teamA.Failures != 1 {
+		t.Fatalf("teamA counters = %#v", teamA)
+	}
+	if teamA.Tokens.InputTokens != 10 || teamA.Tokens.OutputTokens != 5 || teamA.Tokens.ReasoningTokens != 2 || teamA.Tokens.TotalTokens != 17 {
+		t.Fatalf("teamA tokens = %#v", teamA.Tokens)
+	}
+	if !teamA.LastUsedAt.Equal(base.Add(time.Hour)) {
+		t.Fatalf("teamA LastUsedAt = %s", teamA.LastUsedAt)
+	}
+
+	teamB := snapshots[1]
+	if teamB.AccountID != "team-b" || teamB.APIKeyID != "dev" || teamB.Requests != 1 || teamB.Tokens.TotalTokens != 7 {
 		t.Fatalf("teamB snapshot = %#v", teamB)
 	}
 }

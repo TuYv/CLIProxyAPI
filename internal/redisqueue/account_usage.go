@@ -1,7 +1,6 @@
 package redisqueue
 
 import (
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -72,12 +71,7 @@ func AccountUsageSnapshots() []AccountUsageSnapshot {
 	for _, snapshot := range accountUsageStore.records {
 		snapshots = append(snapshots, snapshot)
 	}
-	sort.Slice(snapshots, func(i, j int) bool {
-		if snapshots[i].AccountID != snapshots[j].AccountID {
-			return snapshots[i].AccountID < snapshots[j].AccountID
-		}
-		return snapshots[i].APIKeyID < snapshots[j].APIKeyID
-	})
+	sortAccountUsageSnapshots(snapshots)
 	return snapshots
 }
 
