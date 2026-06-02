@@ -6,11 +6,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 	"github.com/klauspost/compress/zstd"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 )
 
 func TestShouldSkipMethodForRequestLogging(t *testing.T) {
@@ -142,6 +144,63 @@ func TestShouldCaptureRequestBody(t *testing.T) {
 	}
 }
 
+func TestAttachWebsocketLogSourcesUsesLoggerLogsDir(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	logsDir := t.TempDir()
+	logger := logging.NewFileRequestLogger(true, logsDir, "", 0)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	c.Request.Header.Set("Upgrade", "websocket")
+
+	attachWebsocketLogSources(c, logger, true)
+	defer cleanupFileBodySourcesFromContext(c)
+
+	for _, key := range []string{
+		logging.WebsocketTimelineSourceContextKey,
+		logging.APIWebsocketTimelineSourceContextKey,
+	} {
+		value, exists := c.Get(key)
+		if !exists {
+			t.Fatalf("expected %s source to be attached", key)
+		}
+		source, ok := value.(*logging.FileBodySource)
+		if !ok || source == nil {
+			t.Fatalf("%s source type = %T", key, value)
+		}
+		file, errPart := source.CreatePart("probe")
+		if errPart != nil {
+			t.Fatalf("CreatePart(%s): %v", key, errPart)
+		}
+		path := file.Name()
+		if errClose := file.Close(); errClose != nil {
+			t.Fatalf("close part: %v", errClose)
+		}
+		if !strings.HasPrefix(path, logsDir+string(os.PathSeparator)) {
+			t.Fatalf("%s part path %s is not under logs dir %s", key, path, logsDir)
+		}
+	}
+}
+
+func cleanupFileBodySourcesFromContext(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	for _, key := range []string{
+		logging.WebsocketTimelineSourceContextKey,
+		logging.APIWebsocketTimelineSourceContextKey,
+	} {
+		value, exists := c.Get(key)
+		if !exists {
+			continue
+		}
+		if source, ok := value.(*logging.FileBodySource); ok && source != nil {
+			_ = source.Cleanup()
+		}
+	}
+}
+
 func TestCaptureRequestInfoDecodesZstdRequestBodyForLog(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -179,5 +238,28 @@ func TestCaptureRequestInfoDecodesZstdRequestBodyForLog(t *testing.T) {
 	}
 	if !bytes.Equal(restoredBody, compressedBytes) {
 		t.Fatal("request body was not restored with the original compressed bytes")
+	}
+}
+
+func TestDecodeCapturedZstdRequestBodyCapsDecodedSize(t *testing.T) {
+	payload := bytes.Repeat([]byte("a"), int(maxDecodedCapturedRequestBodyBytes)+10)
+	var compressed bytes.Buffer
+	encoder, errNewWriter := zstd.NewWriter(&compressed)
+	if errNewWriter != nil {
+		t.Fatalf("zstd.NewWriter: %v", errNewWriter)
+	}
+	if _, errWrite := encoder.Write(payload); errWrite != nil {
+		t.Fatalf("zstd write: %v", errWrite)
+	}
+	if errClose := encoder.Close(); errClose != nil {
+		t.Fatalf("zstd close: %v", errClose)
+	}
+
+	decoded, errDecode := decodeCapturedZstdRequestBody(compressed.Bytes())
+	if errDecode != nil {
+		t.Fatalf("decodeCapturedZstdRequestBody: %v", errDecode)
+	}
+	if int64(len(decoded)) != maxDecodedCapturedRequestBodyBytes {
+		t.Fatalf("decoded length = %d, want %d", len(decoded), maxDecodedCapturedRequestBodyBytes)
 	}
 }

@@ -17,7 +17,10 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 )
 
-const maxErrorOnlyCapturedRequestBodyBytes int64 = 1 << 20 // 1 MiB
+const (
+	maxErrorOnlyCapturedRequestBodyBytes int64 = 1 << 20 // 1 MiB
+	maxDecodedCapturedRequestBodyBytes   int64 = 1 << 20 // 1 MiB
+)
 
 // RequestLoggingMiddleware creates a Gin middleware that logs HTTP requests and responses.
 // It captures detailed information about the request and response, including headers and body,
@@ -58,6 +61,7 @@ func RequestLoggingMiddleware(logger logging.RequestLogger) gin.HandlerFunc {
 			wrapper.logOnErrorOnly = true
 		}
 		c.Writer = wrapper
+		attachWebsocketLogSources(c, logger, loggerEnabled)
 
 		// Process the request
 		c.Next()
@@ -67,6 +71,26 @@ func RequestLoggingMiddleware(logger logging.RequestLogger) gin.HandlerFunc {
 			// Log error but don't interrupt the response
 			// In a real implementation, you might want to use a proper logger here
 		}
+	}
+}
+
+type fileBodySourceFactory interface {
+	NewFileBodySource(prefix string) (*logging.FileBodySource, error)
+}
+
+func attachWebsocketLogSources(c *gin.Context, logger logging.RequestLogger, loggerEnabled bool) {
+	if c == nil || !loggerEnabled || !isResponsesWebsocketUpgrade(c.Request) {
+		return
+	}
+	factory, ok := logger.(fileBodySourceFactory)
+	if !ok || factory == nil {
+		return
+	}
+	if source, errSource := factory.NewFileBodySource("websocket-timeline"); errSource == nil {
+		c.Set(logging.WebsocketTimelineSourceContextKey, source)
+	}
+	if source, errSource := factory.NewFileBodySource("api-websocket-timeline"); errSource == nil {
+		c.Set(logging.APIWebsocketTimelineSourceContextKey, source)
 	}
 }
 
@@ -196,9 +220,12 @@ func decodeCapturedZstdRequestBody(raw []byte) ([]byte, error) {
 	}
 	defer decoder.Close()
 
-	decoded, errRead := io.ReadAll(decoder)
+	decoded, errRead := io.ReadAll(io.LimitReader(decoder, maxDecodedCapturedRequestBodyBytes+1))
 	if errRead != nil {
 		return nil, fmt.Errorf("failed to decode zstd request body: %w", errRead)
+	}
+	if int64(len(decoded)) > maxDecodedCapturedRequestBodyBytes {
+		return decoded[:maxDecodedCapturedRequestBodyBytes], nil
 	}
 	return decoded, nil
 }

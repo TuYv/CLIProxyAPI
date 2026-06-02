@@ -28,9 +28,12 @@ const (
 	redisKeyModels     = "models"
 	redisKeyUsage      = "usage"
 	redisKeyRequestLog = "request-log"
+	redisKeyAppLog     = "app-log"
 
 	homeReconnectInterval          = time.Second
 	homeReconnectFailoverThreshold = 3
+	homeRedisOperationTimeout      = 3 * time.Second
+	homeSubscriptionReceiveTimeout = 3 * time.Second
 	redisChannelCluster            = "cluster"
 )
 
@@ -172,26 +175,43 @@ func (c *Client) ensureClients() error {
 }
 
 func (c *Client) redisOptionsLocked(addr string) (*redis.Options, error) {
-	tlsConfig, errTLS := c.homeTLSConfigLocked()
+	tlsConfig, errTLS := c.homeTLSConfigLocked(addr)
 	if errTLS != nil {
 		return nil, errTLS
 	}
 	return &redis.Options{
-		Addr:      addr,
-		Password:  c.homeCfg.Password,
-		TLSConfig: tlsConfig,
+		Addr:                  addr,
+		TLSConfig:             tlsConfig,
+		DialTimeout:           homeRedisOperationTimeout,
+		ReadTimeout:           homeRedisOperationTimeout,
+		WriteTimeout:          homeRedisOperationTimeout,
+		MaxRetries:            -1,
+		DialerRetries:         1,
+		ContextTimeoutEnabled: true,
 	}, nil
 }
 
-func (c *Client) homeTLSConfigLocked() (*tls.Config, error) {
+func (c *Client) homeTLSConfigLocked(addr string) (*tls.Config, error) {
 	serverName := strings.TrimSpace(c.homeCfg.TLS.ServerName)
 	if serverName == "" {
-		serverName = strings.TrimSpace(c.seedHost)
+		if c.homeCfg.TLS.UseTargetServerName {
+			serverName = hostFromAddress(addr)
+		} else {
+			serverName = strings.TrimSpace(c.seedHost)
+		}
 	}
 	if serverName == "" {
 		serverName = strings.TrimSpace(c.homeCfg.Host)
 	}
 	return newHomeTLSConfig(c.homeCfg.TLS, serverName)
+}
+
+func hostFromAddress(addr string) string {
+	host, _, errSplit := net.SplitHostPort(strings.TrimSpace(addr))
+	if errSplit == nil {
+		return strings.TrimSpace(host)
+	}
+	return strings.TrimSpace(addr)
 }
 
 func newHomeTLSConfig(cfg config.HomeTLSConfig, fallbackServerName string) (*tls.Config, error) {
@@ -208,6 +228,19 @@ func newHomeTLSConfig(cfg config.HomeTLSConfig, fallbackServerName string) (*tls
 		MinVersion:         tls.VersionTLS12,
 		ServerName:         serverName,
 		InsecureSkipVerify: cfg.InsecureSkipVerify,
+	}
+
+	clientCertPath := strings.TrimSpace(cfg.ClientCert)
+	clientKeyPath := strings.TrimSpace(cfg.ClientKey)
+	if clientCertPath != "" || clientKeyPath != "" {
+		if clientCertPath == "" || clientKeyPath == "" {
+			return nil, fmt.Errorf("home tls: client certificate and key must be set together")
+		}
+		certPair, errLoad := tls.LoadX509KeyPair(clientCertPath, clientKeyPath)
+		if errLoad != nil {
+			return nil, fmt.Errorf("home tls: load client certificate: %w", errLoad)
+		}
+		tlsConfig.Certificates = []tls.Certificate{certPair}
 	}
 
 	caCertPath := strings.TrimSpace(cfg.CACert)
@@ -404,6 +437,25 @@ func (c *Client) failoverAfterReconnectFailure() (bool, string) {
 	}
 	c.reconnectFailures = 0
 
+	return c.switchToNextNodeLocked()
+}
+
+func (c *Client) failoverAfterSubscriptionTimeout() (bool, string) {
+	if c == nil {
+		return false, ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !c.clusterDiscoveryEnabledLocked() {
+		c.reconnectFailures = 0
+		return false, ""
+	}
+	c.reconnectFailures = 0
+	return c.switchToNextNodeLocked()
+}
+
+func (c *Client) switchToNextNodeLocked() (bool, string) {
 	currentHost := strings.TrimSpace(c.homeCfg.Host)
 	currentPort := c.homeCfg.Port
 	candidates := append([]clusterNode(nil), c.clusterNodes...)
@@ -424,6 +476,13 @@ func (c *Client) failoverAfterReconnectFailure() (bool, string) {
 		}
 	}
 	return false, ""
+}
+
+func (c *Client) markSubscriptionTimeout() {
+	switched, addr := c.failoverAfterSubscriptionTimeout()
+	if switched {
+		log.Warnf("home subscription heartbeat timeout; switching to %s", addr)
+	}
 }
 
 func (c *Client) resetReconnectFailures() {
@@ -592,6 +651,17 @@ func (c *Client) RPushRequestLog(ctx context.Context, payload []byte) error {
 	return cmd.RPush(ctx, redisKeyRequestLog, payload).Err()
 }
 
+func (c *Client) RPushAppLog(ctx context.Context, payload []byte) error {
+	cmd, errClient := c.commandClient()
+	if errClient != nil {
+		return errClient
+	}
+	if len(payload) == 0 {
+		return nil
+	}
+	return cmd.RPush(ctx, redisKeyAppLog, payload).Err()
+}
+
 func (c *Client) handleSubscriptionPayload(channel string, payload string, onConfig func([]byte) error) error {
 	payload = strings.TrimSpace(payload)
 	if payload == "" {
@@ -612,7 +682,7 @@ func (c *Client) handleSubscriptionPayload(channel string, payload string, onCon
 }
 
 // StartConfigSubscriber connects to home, fetches config once via GET config, then subscribes to
-// the "config" channel to receive runtime config updates.
+// the "config" and "cluster" channels to receive runtime updates.
 //
 // The subscription connection is treated as the home heartbeat. HeartbeatOK is set to true only
 // after the initial GET config succeeds and the SUBSCRIBE connection is established. When the
@@ -675,7 +745,7 @@ func (c *Client) StartConfigSubscriber(ctx context.Context, onConfig func([]byte
 			continue
 		}
 
-		pubsub := sub.Subscribe(ctx, redisChannelConfig)
+		pubsub := sub.Subscribe(ctx, redisChannelConfig, redisChannelCluster)
 		if pubsub == nil {
 			c.markReconnectFailure("subscribe")
 			sleepWithContext(ctx, homeReconnectInterval)
@@ -683,7 +753,7 @@ func (c *Client) StartConfigSubscriber(ctx context.Context, onConfig func([]byte
 		}
 
 		// Ensure the subscription is established before marking heartbeat OK.
-		if _, errReceive := pubsub.Receive(ctx); errReceive != nil {
+		if _, errReceive := pubsub.ReceiveTimeout(ctx, homeSubscriptionReceiveTimeout); errReceive != nil {
 			_ = pubsub.Close()
 			c.markReconnectFailure("subscribe")
 			sleepWithContext(ctx, homeReconnectInterval)
@@ -694,26 +764,54 @@ func (c *Client) StartConfigSubscriber(ctx context.Context, onConfig func([]byte
 		c.heartbeatOK.Store(true)
 
 		for {
-			msg, errMsg := pubsub.ReceiveMessage(ctx)
+			event, errMsg := pubsub.ReceiveTimeout(ctx, homeSubscriptionReceiveTimeout)
 			if errMsg != nil {
+				if isTimeoutError(errMsg) {
+					if errPing := pubsub.Ping(ctx); errPing == nil {
+						c.resetReconnectFailures()
+						continue
+					}
+					c.markReconnectFailure("subscription timeout")
+				} else {
+					c.markReconnectFailure("subscription")
+				}
 				_ = pubsub.Close()
 				c.heartbeatOK.Store(false)
-				c.markReconnectFailure("subscription")
 				sleepWithContext(ctx, homeReconnectInterval)
 				break
 			}
-			if msg == nil {
-				continue
-			}
-			if errApply := c.handleSubscriptionPayload(msg.Channel, msg.Payload, onConfig); errApply != nil {
-				if strings.EqualFold(strings.TrimSpace(msg.Channel), redisChannelCluster) {
-					log.Warn("failed to apply cluster update from home control center, ignoring")
-				} else {
-					log.Warn("failed to apply config update from home control center, ignoring")
+			switch msg := event.(type) {
+			case *redis.Message:
+				if msg == nil {
+					continue
 				}
+				if errApply := c.handleSubscriptionPayload(msg.Channel, msg.Payload, onConfig); errApply != nil {
+					if strings.EqualFold(strings.TrimSpace(msg.Channel), redisChannelCluster) {
+						log.Warn("failed to apply cluster update from home control center, ignoring")
+					} else {
+						log.Warn("failed to apply config update from home control center, ignoring")
+					}
+				}
+			case *redis.Pong:
+				c.resetReconnectFailures()
+			case *redis.Subscription:
+				continue
+			default:
+				log.Debugf("home subscription returned unsupported message type %T", event)
 			}
 		}
 	}
+}
+
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) {
