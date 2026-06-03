@@ -72,6 +72,33 @@ CLIProxyAPI 用户手册： [https://help.router-for.me/](https://help.router-fo
 
 请参见 [MANAGEMENT_API_CN.md](https://help.router-for.me/cn/management/api)
 
+## 单容器管理中心部署建议
+
+如果你希望把管理中心与 `CLIProxyAPI` 后端一起部署，推荐直接由 `CLIProxyAPI` 提供：
+
+- 管理页面入口：`/management.html`
+- 管理 API：`/v0/management/*`
+- 代理 API：`/v1/*`
+
+建议做法：
+
+1. 构建 `Cli-Proxy-API-Management-Center`，得到单文件 `dist/index.html`
+2. 将其重命名为 `management.html`
+3. 放到 `CLIProxyAPI` 可直接访问的静态目录中
+4. 通过同一个 `CLIProxyAPI` 容器统一提供页面和管理 API
+
+这样可以减少：
+
+- 单独的前端容器
+- 额外的反向代理配置
+- 前后端版本不一致导致的 404 或菜单缺失问题
+
+如果你要使用管理面板或任何 `/v0/management/*` 接口，请确保至少满足：
+
+- 无论本地还是远程访问，都已设置 `remote-management.secret-key`
+- 仅在远程访问管理面板时，额外开启 `remote-management.allow-remote: true`
+- 若希望固定使用本地内置页面，建议关闭 `remote-management.disable-auto-update-panel`
+
 ## 使用量统计
 
 自v6.10.0版本以后，CLIProxyAPI及 [CPAMC](https://github.com/router-for-me/Cli-Proxy-API-Management-Center) 项目不再预置数据统计功能，如果有数据统计需求的请使用以下项目：
